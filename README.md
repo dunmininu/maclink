@@ -109,6 +109,29 @@ phone gets an explicit error message rather than silently doing nothing.
 > Then relaunch the app and approve the fresh prompt. Note that **a full disk also breaks this**: TCC
 > cannot write its database, so the switch appears to move and nothing persists.
 
+### 2b. Grant Automation permission
+
+Mission Control, Spaces, App Exposé, the app switcher, screenshots and screen lock need a *second*
+permission, separate from Accessibility. macOS asks the first time one is used:
+
+*System Settings › Privacy & Security › Automation* → **MacLink Host** → enable **System Events**.
+
+Why two permissions, when Accessibility already allows synthetic input: these particular actions are
+**symbolic hotkeys**, dispatched by machinery that on macOS 26 ignores synthetic events entirely.
+Measured on 26.5 — posting `⌃↑` through `CGEvent` does nothing with flags alone, nothing with genuine
+modifier key events alongside it, and nothing with the keystroke spaced out in time. Driving System
+Events through Apple Events does work, because the keystroke arrives as a script would deliver it
+rather than being injected at the HID layer. See
+[`SystemEventsBridge`](Apps/macOS/Sources/Input/SystemEventsBridge.swift).
+
+Without this grant these commands fail *silently*, which reads as a broken feature rather than a
+missing permission — so the host writes the failure into its activity log, and the menu bar tracks
+the grant alongside Accessibility.
+
+> **Launchpad is gone as of macOS 26.** Apple removed it; there is no `Launchpad.app` to open. That
+> command sends F4, which is what the hardware Launchpad key sent and reaches the Applications view
+> that replaced it. On older macOS it opens Launchpad proper.
+
 ### 3. The iOS app
 
 Open `MacLink.xcodeproj`, select the `MacLink` scheme and a Simulator, and run. This works today —
