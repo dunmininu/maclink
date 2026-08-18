@@ -31,6 +31,9 @@ final class HostCoordinator {
     var onPairingChange: ((PairingRequest?) -> Void)?
 
     private(set) var accessibilityGranted = InputSynthesizer.isTrusted
+    /// Mission Control, Spaces and the app switcher need this on top of Accessibility, because they
+    /// are driven through System Events. See `SystemEventsBridge`.
+    private(set) var automationGranted = false
     private(set) var log: [String] = []
 
     var hostName: String {
@@ -131,6 +134,24 @@ final class HostCoordinator {
     func start() {
         server.start()
         startTimers()
+
+        // Surface a failed system shortcut rather than letting it vanish — without Automation these
+        // fail silently, which is exactly how Mission Control appeared to be "broken".
+        system.events.onFailure = { [weak self] message in
+            self?.append(log: message)
+        }
+
+        // Ask once, at launch, so the dialog lands while the user is at the Mac rather than mid-gesture.
+        automationGranted = system.events.isAuthorized
+        if !automationGranted {
+            system.events.requestAuthorization { [weak self] granted in
+                guard let self else { return }
+                automationGranted = granted
+                append(log: granted
+                       ? "Automation permission granted — Mission Control and Spaces will work"
+                       : "Automation permission denied — Mission Control, Spaces and the app switcher will not work")
+            }
+        }
     }
 
     func stop() {
@@ -139,6 +160,11 @@ final class HostCoordinator {
         trustTimer?.invalidate()
         input.releaseHeldButtons()
         server.stop()
+    }
+
+    func openAutomationSettings() {
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!
+        NSWorkspace.shared.open(url)
     }
 
     func requestAccessibilityPermission() {
@@ -369,11 +395,21 @@ final class HostCoordinator {
     }
 
     private func refreshTrust() {
-        let granted = InputSynthesizer.isTrusted
-        guard granted != accessibilityGranted else { return }
-        accessibilityGranted = granted
-        append(log: granted ? "Accessibility permission granted" : "Accessibility permission revoked")
-        pushStatus()
+        let trusted = InputSynthesizer.isTrusted
+        if trusted != accessibilityGranted {
+            accessibilityGranted = trusted
+            append(log: trusted ? "Accessibility permission granted" : "Accessibility permission revoked")
+            pushStatus()
+        }
+
+        // Automation can be switched on in System Settings at any time, so poll it alongside.
+        let automating = system.events.isAuthorized
+        if automating != automationGranted {
+            automationGranted = automating
+            append(log: automating
+                   ? "Automation permission granted — Mission Control and Spaces will work"
+                   : "Automation permission revoked — Mission Control and Spaces will stop working")
+        }
     }
 
     private func checkPasteboard() {

@@ -39,7 +39,7 @@ struct KeyboardPane: View {
             .padding(.horizontal, 12)
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
 
-            Text("Everything you type here goes straight to the Mac. Nothing is stored on the phone.")
+            Text("Everything you type here goes straight to the Mac. Nothing is stored on the phone. Use the ⌨︎ button above the keyboard to put it away.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -206,6 +206,28 @@ struct RemoteKeyboardField: UIViewRepresentable {
         Coordinator(onEvent: onEvent)
     }
 
+    /// A bar above the keyboard with the only reliable way off it.
+    ///
+    /// This field swallows Return and forwards it to the Mac, so the usual "return dismisses"
+    /// habit cannot work here, and a bare text field on a full-height pane leaves no empty space
+    /// to tap. Without this the keyboard could be raised and never lowered.
+    private func makeAccessoryBar(for field: UITextField, coordinator: Coordinator) -> UIToolbar {
+        let bar = UIToolbar()
+        bar.sizeToFit()
+        let hide = UIBarButtonItem(
+            image: UIImage(systemName: "keyboard.chevron.compact.down"),
+            style: .done,
+            target: coordinator,
+            action: #selector(Coordinator.hideKeyboard)
+        )
+        hide.accessibilityLabel = "Hide keyboard"
+        bar.items = [
+            UIBarButtonItem(systemItem: .flexibleSpace),
+            hide,
+        ]
+        return bar
+    }
+
     func makeUIView(context: Context) -> UITextField {
         let field = UITextField()
         field.delegate = context.coordinator
@@ -220,12 +242,23 @@ struct RemoteKeyboardField: UIViewRepresentable {
         field.returnKeyType = .default
         field.borderStyle = .none
         field.text = Coordinator.sentinel
+        field.inputAccessoryView = makeAccessoryBar(for: field, coordinator: context.coordinator)
+        context.coordinator.field = field
         if isFocused { field.becomeFirstResponder() }
         return field
     }
 
     func updateUIView(_ field: UITextField, context: Context) {
         context.coordinator.onEvent = onEvent
+        // Let the binding drive the keyboard in both directions. Previously this was write-only, so
+        // setting it to false had no effect and the keyboard stayed up.
+        let binding = $isFocused
+        context.coordinator.setFocus = { binding.wrappedValue = $0 }
+        if isFocused, !field.isFirstResponder {
+            field.becomeFirstResponder()
+        } else if !isFocused, field.isFirstResponder {
+            field.resignFirstResponder()
+        }
     }
 
     @MainActor
@@ -233,9 +266,16 @@ struct RemoteKeyboardField: UIViewRepresentable {
         /// A single space keeps the field non-empty so iOS keeps reporting backspaces.
         static let sentinel = " "
         var onEvent: (KeyboardEvent) -> Void
+        /// Reports focus back to SwiftUI so the binding matches reality after the user dismisses.
+        var setFocus: ((Bool) -> Void)?
+        weak var field: UITextField?
 
         init(onEvent: @escaping (KeyboardEvent) -> Void) {
             self.onEvent = onEvent
+        }
+
+        @objc func hideKeyboard() {
+            field?.resignFirstResponder()
         }
 
         func textField(
@@ -262,6 +302,11 @@ struct RemoteKeyboardField: UIViewRepresentable {
 
         func textFieldDidBeginEditing(_ textField: UITextField) {
             textField.text = Self.sentinel
+            setFocus?(true)
+        }
+
+        func textFieldDidEndEditing(_ textField: UITextField) {
+            setFocus?(false)
         }
     }
 }

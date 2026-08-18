@@ -13,6 +13,9 @@ final class SystemController {
 
     private let input: InputSynthesizer
 
+    /// Used only for the commands the symbolic-hotkey machinery owns. See `SystemEventsBridge`.
+    let events = SystemEventsBridge()
+
     init(input: InputSynthesizer) {
         self.input = input
     }
@@ -38,23 +41,42 @@ final class SystemController {
 
     func handle(_ command: SystemCommand) {
         switch command {
-        // These mirror the stock macOS shortcuts, so they follow whatever the user has configured
-        // in Keyboard settings rather than fighting it.
-        case .missionControl: input.press(.special(.up), modifiers: [.control])
-        case .applicationWindows: input.press(.special(.down), modifiers: [.control])
-        case .spaceLeft: input.press(.special(.left), modifiers: [.control])
-        case .spaceRight: input.press(.special(.right), modifiers: [.control])
-        case .showDesktop: input.press(.special(.f11), modifiers: [.function])
-        case .launchpad: input.press(.special(.f4), modifiers: [.function])
-        case .screenshotFull: input.press(.character("3"), modifiers: [.command, .shift])
-        case .screenshotRegion: input.press(.character("4"), modifiers: [.command, .shift])
+        // Mission Control, Spaces, App Exposé, Launchpad, screenshots and screen lock are all
+        // symbolic hotkeys. macOS 26 will not fire those from a synthetic event, so they go through
+        // System Events instead — see `SystemEventsBridge` for the measurements behind that.
+        case .missionControl: systemShortcut(.special(.up), [.control])
+        case .applicationWindows: systemShortcut(.special(.down), [.control])
+        case .spaceLeft: systemShortcut(.special(.left), [.control])
+        case .spaceRight: systemShortcut(.special(.right), [.control])
+        case .showDesktop: systemShortcut(.special(.f11), [])
+        // Launchpad no longer exists as of macOS 26; F4 is what its key sent, and now reaches the
+        // Applications view that replaced it.
+        case .launchpad: systemShortcut(.special(.f4), [])
+        case .screenshotFull: systemShortcut(.character("3"), [.command, .shift])
+        case .screenshotRegion: systemShortcut(.character("4"), [.command, .shift])
+        case .lockScreen: systemShortcut(.character("q"), [.command, .control])
+        // The app switcher needs the modifier genuinely held, which a posted event does not manage.
+        case .switchAppForward: systemShortcut(.special(.tab), [.command])
+        case .switchAppBackward: systemShortcut(.special(.tab), [.command, .shift])
+
+        // Ordinary key equivalents. Any app handles these, so they stay on the cheaper path.
         case .quitApp: input.press(.character("q"), modifiers: [.command])
         case .closeWindow: input.press(.character("w"), modifiers: [.command])
-        case .switchAppForward: input.press(.special(.tab), modifiers: [.command])
-        case .switchAppBackward: input.press(.special(.tab), modifiers: [.command, .shift])
-        case .lockScreen: input.press(.character("q"), modifiers: [.command, .control])
+
         case .sleepDisplay: runTool("/usr/bin/pmset", ["displaysleepnow"])
         case .sleepSystem: runTool("/usr/bin/osascript", ["-e", "tell application \"System Events\" to sleep"])
+        }
+    }
+
+    private func systemShortcut(_ key: KeyCode, _ modifiers: [SystemEventsBridge.Modifier]) {
+        guard let code = virtualKeyCode(for: key) else { return }
+        events.send(keyCode: code, modifiers: modifiers)
+    }
+
+    private func virtualKeyCode(for key: KeyCode) -> Int? {
+        switch key {
+        case .special(let special): return Int(VirtualKeys.code(for: special))
+        case .character(let character): return VirtualKeys.code(forCharacter: character).map(Int.init)
         }
     }
 
