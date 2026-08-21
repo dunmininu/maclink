@@ -32,7 +32,10 @@ private struct GeneralSettings: View {
                 Toggle("Start MacLink Host at login", isOn: $coordinator.launchesAtLogin)
                 Toggle("Allow new devices to pair", isOn: $coordinator.acceptsNewPairings)
                 Toggle("Share clipboard automatically", isOn: $coordinator.syncsClipboardAutomatically)
-                Text("When clipboard sharing is on, anything you copy on this Mac is sent to the connected phone.")
+                    .disabled(!HostCoordinator.automaticClipboardSharingAvailable)
+                Text(HostCoordinator.automaticClipboardSharingAvailable
+                     ? "Anything you copy on this Mac is sent to the connected phone — except passwords, and except anything that arrived from another device."
+                     : "Turned off: macOS Universal Clipboard already copies between your own devices, and a second thing polling the clipboard gets in its way. Use Copy to Phone in the app when you want to send something deliberately.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

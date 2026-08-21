@@ -90,6 +90,24 @@ final class HostCoordinator {
     private var trustTimer: Timer?
     private var lastPasteboardChangeCount = NSPasteboard.general.changeCount
 
+    /// Automatic clipboard sharing is deliberately switched off, and the toggle is disabled.
+    ///
+    /// macOS already moves the clipboard between your own devices, and a second thing doing the same
+    /// job cannot help but get in the way. Universal Clipboard content arrives as a *lazy promise*:
+    /// the Mac holds a placeholder and fetches the payload only when something reads it. A background
+    /// poll reading the pasteboard every second forces that fetch every time, which defeats the
+    /// laziness Continuity is built on and echoes the phone's own clipboard back at it.
+    ///
+    /// That specific fault is fixed — `readClipboard(automatic:)` now skips remote, concealed and
+    /// transient content — but the feature is redundant with the OS on any Mac and iPhone signed into
+    /// the same account, and being wrong here is far more annoying than going without. So it stays
+    /// off, and the code stays in place rather than being deleted, documented for anyone who wants it
+    /// back on a setup where Continuity is not available.
+    ///
+    /// The explicit send/paste actions are unaffected: they touch the pasteboard only when the user
+    /// asks, which is intent, not interference.
+    static let automaticClipboardSharingAvailable = false
+
     /// Consecutive failed pairings, and the deadline until which new attempts are refused.
     private var failedPairings = 0
     private var pairingLockedUntil: Date?
@@ -121,7 +139,8 @@ final class HostCoordinator {
 
         hostName = resolvedName
         acceptsNewPairings = defaults.object(forKey: Keys.acceptsNewPairings) as? Bool ?? true
-        syncsClipboardAutomatically = defaults.bool(forKey: Keys.autoClipboard)
+        syncsClipboardAutomatically = Self.automaticClipboardSharingAvailable
+            && defaults.bool(forKey: Keys.autoClipboard)
         launchesAtLogin = SMAppService.mainApp.status == .enabled
         hasSeenWelcome = defaults.bool(forKey: Keys.hasSeenWelcome)
         pairedDevices = trustStore.devices
@@ -373,8 +392,10 @@ final class HostCoordinator {
         statusTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.pushStatus() }
         }
-        pasteboardTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.checkPasteboard() }
+        if Self.automaticClipboardSharingAvailable {
+            pasteboardTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.checkPasteboard() }
+            }
         }
         trustTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshTrust() }
@@ -413,11 +434,14 @@ final class HostCoordinator {
     }
 
     private func checkPasteboard() {
+        guard Self.automaticClipboardSharingAvailable else { return }
         guard syncsClipboardAutomatically, !server.sessions.isEmpty else { return }
         let pasteboard = NSPasteboard.general
         guard pasteboard.changeCount != lastPasteboardChangeCount else { return }
         lastPasteboardChangeCount = pasteboard.changeCount
-        guard let text = system.readClipboard() else { return }
+        // `automatic:` makes this skip Universal Clipboard promises, passwords and transient
+        // content, so the background sync never interferes with the Mac's own Continuity.
+        guard let text = system.readClipboard(automatic: true) else { return }
         server.broadcast(.clipboard(text: text))
     }
 
